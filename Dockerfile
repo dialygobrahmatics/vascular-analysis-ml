@@ -8,7 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # libglib is the one system library opencv-python-headless needs on slim images
-RUN apt-get update \n    && apt-get install -y --no-install-recommends libglib2.0-0 \n    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

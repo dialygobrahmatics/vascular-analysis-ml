@@ -4,3 +4,5 @@ scikit-image>=0.22
 matplotlib>=3.8
 pydicom>=2.4
 flask>=3.0
+opencv-python-headless>=4.9
+gunicorn>=22.0

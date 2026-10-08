@@ -1,0 +1,17 @@
+services:
+  vascular-analysis:
+    build: .
+    container_name: vascular-analysis
+    restart: unless-stopped
+    environment:
+      # Optional login. Leave unset (or empty) to keep the app open.
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-}
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-}
+    ports:
+      # Public on host port 8081 (port 80 is used by the Dialygo stack).
+      - "${HOST_PORT:-8081}:5000"
+    volumes:
+      - uploads:/app/static/uploads
+
+volumes:
+  uploads:

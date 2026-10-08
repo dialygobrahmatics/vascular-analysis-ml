@@ -49,7 +49,7 @@
     input[type="file"] { display: none; }
     .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 16px; }
     .field { flex: 1; min-width: 180px; }
-    input[type="number"] {
+    input[type="number"], select {
       width: 100%;
       background: #0e1420;
       border: 1px solid var(--border);
@@ -125,6 +125,33 @@
       margin-bottom: 8px;
       font-weight: 700;
     }
+    .tabs { display: flex; gap: 6px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .tab {
+      background: none;
+      color: var(--muted);
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 10px 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab:hover { background: none; color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .pane { display: none; }
+    .pane.active { display: block; }
+    .summary {
+      background: rgba(62, 166, 255, 0.07);
+      border: 1px solid var(--accent-dim);
+      border-radius: 8px;
+      padding: 18px;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    .part { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 22px; }
+    .part h3 { font-size: 1rem; margin: 0; }
+    .part .when { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+    .skipped { color: var(--muted); font-style: italic; font-size: 0.92rem; }
     .overlay-img { width: 100%; border-radius: 8px; margin-top: 18px; border: 1px solid var(--border); }
     .disclaimer { color: var(--muted); font-size: 0.75rem; margin-top: 22px; line-height: 1.5; }
     .spinner {
@@ -149,31 +176,74 @@
 <body>
   <div class="wrap">
     <h1>Vascular Analysis</h1>
-    <div class="subtitle">Upload an angiogram / X-ray image to run automated vessel segmentation and quantification. Research use only &mdash; not a clinical diagnostic tool.</div>
+    <div class="subtitle">Upload an angiography image or video (MR/CT angiography with bright vessels, or X-ray/DSA with dark vessels) to run automated vessel segmentation and quantification. Research use only &mdash; not a clinical diagnostic tool.</div>
 
     {% if error %}
       <div class="error">{{ error }}</div>
     {% endif %}
 
     <div class="card">
-      <form id="analyze-form" action="/analyze" method="post" enctype="multipart/form-data">
-        <label for="file-input">Image file</label>
-        <div class="dropzone" id="dropzone">
-          <div>Drag &amp; drop an image here, or click to browse</div>
-          <div class="fname" id="fname"></div>
-          <input type="file" id="file-input" name="image" accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,.dcm,.dicom" required />
-        </div>
+      <div class="tabs">
+        <button type="button" class="tab {{ 'active' if mode != 'video' }}" data-pane="image">Image</button>
+        <button type="button" class="tab {{ 'active' if mode == 'video' }}" data-pane="video">Video</button>
+      </div>
 
+      <form class="pane {{ 'active' if mode != 'video' }}" id="pane-image" action="/analyze" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="mode" value="image" />
+        <label>Image file</label>
+        <div class="dropzone">
+          <div>Drag &amp; drop an image here, or click to browse</div>
+          <div class="fname"></div>
+          <input type="file" name="image" accept="{{ image_exts|join(',') }}" required />
+        </div>
         <div class="row">
           <div class="field">
-            <label for="spacing">Pixel spacing override (mm/px, optional)</label>
-            <input type="number" step="0.001" min="0" id="spacing" name="spacing_mm" placeholder="leave blank to auto-detect" />
+            <label for="vessels-image">Vessel appearance</label>
+            <select id="vessels-image" name="vessels">
+              <option value="auto">Auto-detect</option>
+              <option value="bright">Bright vessels (MR/CT angiography)</option>
+              <option value="dark">Dark vessels (X-ray / DSA)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="spacing-image">Pixel spacing override (mm/px, optional)</label>
+            <input type="number" step="0.001" min="0" id="spacing-image" name="spacing_mm" placeholder="leave blank to auto-detect" />
           </div>
         </div>
-        <div class="hint">Supported formats: PNG, JPG/JPEG, TIFF, BMP, DICOM (.dcm). If the file carries DICOM pixel spacing, measurements are reported in mm; otherwise in pixels unless overridden above.</div>
+        <div class="hint">Supported formats: PNG, JPG/JPEG, TIFF, BMP, DICOM (.dcm), up to {{ max_image_mb }} MB. If the file carries DICOM pixel spacing, measurements are reported in mm; otherwise in pixels unless overridden above.</div>
+        <button type="submit">Run analysis</button>
+        <div class="spinner"><div class="dot"></div> Processing image&hellip;</div>
+      </form>
 
-        <button type="submit" id="submit-btn">Run analysis</button>
-        <div class="spinner" id="spinner"><div class="dot"></div> Processing image&hellip;</div>
+      <form class="pane {{ 'active' if mode == 'video' }}" id="pane-video" action="/analyze-video" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="mode" value="video" />
+        <label>Video file</label>
+        <div class="dropzone">
+          <div>Drag &amp; drop a video here, or click to browse</div>
+          <div class="fname"></div>
+          <input type="file" name="video" accept="{{ video_exts|join(',') }}" required />
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="parts">Number of parts</label>
+            <input type="number" id="parts" name="parts" min="{{ min_parts }}" max="{{ max_parts }}" step="1" value="{{ default_parts }}" />
+          </div>
+          <div class="field">
+            <label for="vessels-video">Vessel appearance</label>
+            <select id="vessels-video" name="vessels">
+              <option value="auto">Auto-detect</option>
+              <option value="bright">Bright vessels (MR/CT angiography)</option>
+              <option value="dark">Dark vessels (X-ray / DSA)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="spacing-video">Pixel spacing override (mm/px, optional)</label>
+            <input type="number" step="0.001" min="0" id="spacing-video" name="spacing_mm" placeholder="leave blank to auto-detect" />
+          </div>
+        </div>
+        <div class="hint">Supported: MP4, AVI, MOV, MKV, WEBM, OGV, MPG, WMV and multi-frame DICOM cine (.dcm), up to {{ max_video_mb }} MB and 2 minutes. The video is split into equal parts and the best-quality frame of each part is analysed. Pixel spacing refers to the original video pixels. More parts take longer (up to a couple of minutes).</div>
+        <button type="submit">Analyse video</button>
+        <div class="spinner"><div class="dot"></div> Processing video&hellip; this can take a minute or two.</div>
       </form>
     </div>
 
@@ -181,7 +251,10 @@
       <div class="card">
         <div class="result-header">
           <h2>Result &mdash; {{ filename }}</h2>
-          <span class="badge">quality: {{ quality }}</span>
+          <span>
+            <span class="badge">vessels: {{ polarity.polarity }}{{ ' (auto)' if polarity.source == 'auto' }}</span>
+            <span class="badge">quality: {{ quality }}</span>
+          </span>
         </div>
         <div class="stats">
           <div class="stat"><div class="num">{{ n_branches }}</div><div class="lbl">branches</div></div>
@@ -198,53 +271,103 @@
       </div>
     {% endif %}
 
+    {% if video_error %}
+      <div class="card">
+        <div class="result-header"><h2>Video could not be analysed &mdash; {{ filename }}</h2></div>
+        <div class="error">{{ video_error }}</div>
+        {% if video_error_notes %}
+          <div class="recommendation"><span class="rec-title">Recommendations</span>{{ video_error_notes|join('\n\n') }}</div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {% if video_summary %}
+      <div class="card">
+        <div class="result-header">
+          <h2>Video result &mdash; {{ filename }}</h2>
+          <span class="badge">vessels: {{ polarity.polarity }}{{ ' (auto)' if polarity.source == 'auto' }}</span>
+        </div>
+        <div class="summary">{{ video_summary }}</div>
+        {% if video_notes %}
+          <div class="recommendation"><span class="rec-title">Video recommendations</span>{{ video_notes|join('\n\n') }}</div>
+        {% endif %}
+
+        {% for p in parts %}
+          <div class="part">
+            <div class="result-header">
+              <h3>Part {{ p.index }} <span class="when">({{ p.range }}{% if p.time_label %}; frame at {{ p.time_label }}{% endif %})</span></h3>
+              {% if p.quality %}<span class="badge">quality: {{ p.quality }}</span>{% endif %}
+            </div>
+            {% if p.observation %}
+              <div class="stats">
+                <div class="stat"><div class="num">{{ p.n_branches }}</div><div class="lbl">branches</div></div>
+                <div class="stat"><div class="num">{{ "%.1f"|format(p.total_length) if p.total_length is not none else "-" }}</div><div class="lbl">total length</div></div>
+                <div class="stat"><div class="num">{{ p.n_stenoses }}</div><div class="lbl">candidate narrowings</div></div>
+              </div>
+              <div class="observation">{{ p.observation }}</div>
+              {% if p.recommendation %}
+                <div class="recommendation"><span class="rec-title">Recommendations</span>{{ p.recommendation }}</div>
+              {% endif %}
+              <img class="overlay-img" src="{{ p.overlay_url }}" alt="part {{ p.index }} segmentation overlay" loading="lazy" />
+            {% else %}
+              <div class="skipped">{{ p.skipped }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
     <div class="disclaimer">
       These are automated, deterministic measurements from an image-processing pipeline. They do not constitute a clinical diagnosis and must be correlated with expert interpretation.
     </div>
   </div>
 
   <script>
-    const dropzone = document.getElementById("dropzone");
-    const fileInput = document.getElementById("file-input");
-    const fname = document.getElementById("fname");
-    const form = document.getElementById("analyze-form");
-    const submitBtn = document.getElementById("submit-btn");
-    const spinner = document.getElementById("spinner");
-
-    dropzone.addEventListener("click", () => fileInput.click());
-
-    fileInput.addEventListener("change", () => {
-      if (fileInput.files.length) {
-        fname.textContent = fileInput.files[0].name;
-        fname.style.display = "block";
-      }
-    });
-
-    ["dragenter", "dragover"].forEach((evt) =>
-      dropzone.addEventListener(evt, (e) => {
-        e.preventDefault();
-        dropzone.classList.add("drag");
+    document.querySelectorAll(".tab").forEach((tab) =>
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+        document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + tab.dataset.pane));
       })
     );
-    ["dragleave", "drop"].forEach((evt) =>
-      dropzone.addEventListener(evt, (e) => {
-        e.preventDefault();
-        dropzone.classList.remove("drag");
-      })
-    );
-    dropzone.addEventListener("drop", (e) => {
-      const files = e.dataTransfer.files;
-      if (files.length) {
-        fileInput.files = files;
-        fname.textContent = files[0].name;
-        fname.style.display = "block";
-      }
-    });
 
-    form.addEventListener("submit", () => {
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Processing…";
-      spinner.classList.add("active");
+    document.querySelectorAll(".pane").forEach((form) => {
+      const dropzone = form.querySelector(".dropzone");
+      const fileInput = form.querySelector('input[type="file"]');
+      const fname = form.querySelector(".fname");
+      const submitBtn = form.querySelector('button[type="submit"]');
+      const spinner = form.querySelector(".spinner");
+      const showName = (files) => {
+        if (files.length) {
+          fname.textContent = files[0].name;
+          fname.style.display = "block";
+        }
+      };
+
+      dropzone.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", () => showName(fileInput.files));
+      ["dragenter", "dragover"].forEach((evt) =>
+        dropzone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          dropzone.classList.add("drag");
+        })
+      );
+      ["dragleave", "drop"].forEach((evt) =>
+        dropzone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          dropzone.classList.remove("drag");
+        })
+      );
+      dropzone.addEventListener("drop", (e) => {
+        if (e.dataTransfer.files.length) {
+          fileInput.files = e.dataTransfer.files;
+          showName(fileInput.files);
+        }
+      });
+      form.addEventListener("submit", () => {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Processing…";
+        spinner.classList.add("active");
+      });
     });
   </script>
 </body>

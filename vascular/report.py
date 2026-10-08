@@ -1,13 +1,49 @@
 """
-Single-paragraph MR Vascular Observation Report.
+Single-paragraph Vascular Observation Report.
 
 Deterministic template over the measured metrics: no generative model is involved, so
 every number in the paragraph is traceable to the JSON metrics file.
-Customized specifically for 3D MR Angiography (MRA) vascular structures.
+Wording follows the vessel polarity the image was analysed with: "bright" for MR/CT
+angiography projections (MIP), "dark" for X-ray / DSA angiography.
 """
 
 from __future__ import annotations
 from pathlib import Path
+
+MODALITY = {
+    "bright": {
+        "name": "MR/CT angiographic",
+        "no_vessel_causes": (
+            "poor signal-to-noise ratio, out-of-volume cropping, or insufficient flow-velocity "
+            "or contrast enhancement"
+        ),
+        "review": "the study should be reviewed manually on the original 3D multi-planar slices",
+        "tree": "contrast/flow-enhanced 3D arterial tree",
+        "tortuosity_note": "clinical thresholds for carotid/vertebral tortuosity or kinking are definition-dependent",
+        "caveat": (
+            "These are automated deterministic measurements calculated across a multi-planar or maximum intensity "
+            "reconstruction and do not constitute a clinical diagnosis; overlapping anatomical structures, "
+            "magnetic susceptibility artifacts, turbulent flow signal loss, and patient movement can skew diameter calculations. "
+            "Direct clinical correlation with expert neuroradiological interpretation and hemodynamic velocity assessment is required."
+        ),
+    },
+    "dark": {
+        "name": "X-ray angiographic",
+        "no_vessel_causes": (
+            "inadequate contrast opacification, a frame captured before contrast arrival or after washout, "
+            "over- or under-exposure, or patient motion"
+        ),
+        "review": "the run should be reviewed manually frame by frame",
+        "tree": "contrast-opacified vessel tree",
+        "tortuosity_note": "clinical thresholds for tortuosity are territory- and definition-dependent",
+        "caveat": (
+            "These are automated deterministic measurements on a single 2D projection and do not constitute a "
+            "clinical diagnosis; vessel overlap, foreshortening, incomplete contrast filling, catheter or guidewire "
+            "shadows, and cardiac, respiratory or patient motion can skew diameter calculations. "
+            "Direct clinical correlation with expert interventional or radiological interpretation is required."
+        ),
+    },
+}
 
 def build_observation(
     metrics: dict,
@@ -16,18 +52,19 @@ def build_observation(
     unit: str = "mm",
     density: float = 0.0,
     calibrated: bool = True, # Set default to True as MRA datasets include physical spacing
+    polarity: str = "bright",
 ) -> str:
-    src = Path(meta.get("source", "input")).name
-    kind = meta.get("format", "MR Angiogram (MRA)")
+    src = meta.get("label") or Path(meta.get("source", "input")).name
+    kind = meta.get("format", "image")
     q = quality.get("label", "adequate")
+    mod = MODALITY.get(polarity, MODALITY["bright"])
 
     if metrics["n_branches"] == 0:
         return (
-            f"Automated MR angiographic analysis of {src} ({kind}; image quality graded {q}) "
+            f"Automated {mod['name']} analysis of {src} ({kind}; image quality graded {q}) "
             f"did not segment any analysable vessel structure above the detection threshold, so no "
             f"quantitative vascular observation can be issued; this pattern is typically seen with "
-            f"poor signal-to-noise ratio, out-of-volume cropping, or insufficient flow-velocity contrast, "
-            f"and the study should be reviewed manually on the original 3D multi-planar slices."
+            f"{mod['no_vessel_causes']}, and {mod['review']}."
         )
 
     calib = (
@@ -37,8 +74,8 @@ def build_observation(
     )
 
     s1 = (
-        f"Automated MR angiographic analysis of {src} ({kind}; image quality graded {q}; {calib}) "
-        f"demonstrates a contrast/flow-enhanced 3D arterial tree occupying {density * 100:.1f}% of the "
+        f"Automated {mod['name']} analysis of {src} ({kind}; image quality graded {q}; {calib}) "
+        f"demonstrates a {mod['tree']} occupying {density * 100:.1f}% of the "
         f"analysable field of view, comprising {metrics['n_branches']} analysable centerline "
         f"branch(es) with a total length of {metrics['total_length']:.1f} {unit}, "
         f"{metrics['n_bifurcations']} bifurcation point(s) and {metrics['n_endpoints']} free "
@@ -56,8 +93,7 @@ def build_observation(
         s3 = (
             f"Branch tortuosity, expressed as the centerline arc-to-chord ratio, has a median of "
             f"{metrics['mean_tortuosity']:.2f} and a maximum of {metrics['max_tortuosity']:.2f} "
-            f"(a value of 1.0 corresponds to a perfectly straight segment; clinical thresholds for "
-            f"carotid/vertebral tortuosity or kinking are definition-dependent)."
+            f"(a value of 1.0 corresponds to a perfectly straight segment; {mod['tortuosity_note']})."
         )
     else:
         s3 = "Branch tortuosity could not be computed because no branch yielded a finite arc-to-chord ratio."
@@ -78,12 +114,7 @@ def build_observation(
             f"was identified along the tracked tracking branches."
         )
 
-    s5 = (
-        "These are automated deterministic measurements calculated across a multi-planar or maximum intensity "
-        "reconstruction and do not constitute a clinical diagnosis; overlapping anatomical structures, "
-        "magnetic susceptibility artifacts, turbulent flow signal loss, and patient movement can skew diameter calculations. "
-        "Direct clinical correlation with expert neuroradiological interpretation and hemodynamic velocity assessment is required."
-    )
+    s5 = mod["caveat"]
     if q != "adequate":
         s5 += f" Image quality was graded {q}, which further limits measurement confidence."
 
@@ -96,6 +127,14 @@ def build_recommendations(checks: dict, metrics: dict, quality: dict) -> str:
     is traceable to a specific check result, not a generic disclaimer.
     """
     notes: list[str] = []
+
+    pol = checks.get("polarity") or {}
+    if pol.get("source") == "auto" and not pol.get("confident", True):
+        appearance = "bright (MR/CT angiography)" if pol.get("polarity") == "bright" else "dark (X-ray/DSA angiography)"
+        notes.append(
+            f"Vessel appearance could not be determined confidently and the image was analysed assuming "
+            f"{appearance} vessels; if that is wrong, re-run with the vessel appearance option set manually."
+        )
 
     panels = checks.get("panels", {})
     artifacts = checks.get("artifacts", [])

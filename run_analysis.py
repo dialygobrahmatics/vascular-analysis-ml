@@ -153,7 +153,7 @@ def analyze_array(
             indent=2,
         )
     overlay_png = outdir / f"{stem}_overlay.png"
-    _overlay(meta.get("label") or Path(meta.get("source", stem)).name, shown, seg, metrics, overlay_png)
+    _overlay(meta.get("title") or meta.get("label") or Path(meta.get("source", stem)).name, shown, seg, metrics, overlay_png)
     return {
         "observation": paragraph,
         "recommendation": recommendation,

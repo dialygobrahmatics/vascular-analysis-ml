@@ -84,10 +84,15 @@ def _common_form(mode: str):
     return spacing_mm, vessels
 
 
-def _save_upload(file) -> Path:
+def _save_upload(file, keep_name: bool = True) -> Path:
     token = uuid.uuid4().hex[:12]
-    safe_name = secure_filename(file.filename) or "upload"
-    saved_path = UPLOAD_DIR / f"{token}_{safe_name}"
+    if keep_name:
+        name = f"{token}_{secure_filename(file.filename) or 'upload'}"
+    else:
+        # result files are named after the upload, so dropping the original name keeps
+        # it out of the overlay URLs too
+        name = f"{token}{Path(file.filename).suffix.lower()}"
+    saved_path = UPLOAD_DIR / name
     file.save(saved_path)
     return saved_path
 
@@ -166,13 +171,13 @@ def analyze_video_route():
     if not MIN_PARTS <= parts <= MAX_PARTS:
         return page("video", error=f"Number of parts must be between {MIN_PARTS} and {MAX_PARTS}.")
 
-    saved_path = _save_upload(file)
+    saved_path = _save_upload(file, keep_name=False)
     try:
         res = analyze_video(
-            saved_path, UPLOAD_DIR, saved_path.stem, parts=parts, spacing_mm=spacing_mm, vessels=vessels, label=file.filename
+            saved_path, UPLOAD_DIR, saved_path.stem, parts=parts, spacing_mm=spacing_mm, vessels=vessels
         )
     except VideoError as exc:
-        return page("video", filename=file.filename, video_error=str(exc), video_error_notes=exc.notes)
+        return page("video", video_error=str(exc), video_error_notes=exc.notes)
     except Exception as exc:
         return page("video", error=f"Video analysis failed: {exc}")
     finally:
@@ -203,7 +208,6 @@ def analyze_video_route():
 
     return page(
         "video",
-        filename=file.filename,
         video_summary=res["summary"],
         video_notes=res["notes"],
         polarity=res["polarity"],

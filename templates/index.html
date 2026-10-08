@@ -178,17 +178,13 @@
     <h1>Vascular Analysis</h1>
     <div class="subtitle">Upload an angiography image or video (MR/CT angiography with bright vessels, or X-ray/DSA with dark vessels) to run automated vessel segmentation and quantification. Research use only &mdash; not a clinical diagnostic tool.</div>
 
-    {% if error %}
-      <div class="error">{{ error }}</div>
-    {% endif %}
-
     <div class="card">
       <div class="tabs">
         <button type="button" class="tab {{ 'active' if mode != 'video' }}" data-pane="image">Image</button>
         <button type="button" class="tab {{ 'active' if mode == 'video' }}" data-pane="video">Video</button>
       </div>
 
-      <form class="pane {{ 'active' if mode != 'video' }}" id="pane-image" action="/analyze" method="post" enctype="multipart/form-data">
+      <form class="pane {{ 'active' if mode != 'video' }}" id="pane-image" action="/analyze" method="post" data-max-mb="{{ max_image_mb }}" enctype="multipart/form-data">
         <input type="hidden" name="mode" value="image" />
         <label>Image file</label>
         <div class="dropzone">
@@ -215,7 +211,7 @@
         <div class="spinner"><div class="dot"></div> Processing image&hellip;</div>
       </form>
 
-      <form class="pane {{ 'active' if mode == 'video' }}" id="pane-video" action="/analyze-video" method="post" enctype="multipart/form-data">
+      <form class="pane {{ 'active' if mode == 'video' }}" id="pane-video" action="/analyze-video" method="post" data-max-mb="{{ max_video_mb }}" enctype="multipart/form-data">
         <input type="hidden" name="mode" value="video" />
         <label>Video file</label>
         <div class="dropzone">
@@ -247,6 +243,14 @@
       </form>
     </div>
 
+    <!-- everything the server returns for an analysis lives in #results; the forms are
+         submitted in the background and only this block is swapped, so the page URL
+         stays "/" and a refresh is a clean GET instead of a form resubmission -->
+    <div id="results">
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
     {% if observation %}
       <div class="card">
         <div class="result-header">
@@ -273,7 +277,7 @@
 
     {% if video_error %}
       <div class="card">
-        <div class="result-header"><h2>Video could not be analysed &mdash; {{ filename }}</h2></div>
+        <div class="result-header"><h2>This video could not be analysed</h2></div>
         <div class="error">{{ video_error }}</div>
         {% if video_error_notes %}
           <div class="recommendation"><span class="rec-title">Recommendations</span>{{ video_error_notes|join('\n\n') }}</div>
@@ -284,7 +288,7 @@
     {% if video_summary %}
       <div class="card">
         <div class="result-header">
-          <h2>Video result &mdash; {{ filename }}</h2>
+          <h2>Video result</h2>
           <span class="badge">vessels: {{ polarity.polarity }}{{ ' (auto)' if polarity.source == 'auto' }}</span>
         </div>
         <div class="summary">{{ video_summary }}</div>
@@ -316,6 +320,7 @@
         {% endfor %}
       </div>
     {% endif %}
+    </div>
 
     <div class="disclaimer">
       These are automated, deterministic measurements from an image-processing pipeline. They do not constitute a clinical diagnosis and must be correlated with expert interpretation.
@@ -323,6 +328,14 @@
   </div>
 
   <script>
+    const results = document.getElementById("results");
+    const showError = (msg) => {
+      const div = document.createElement("div");
+      div.className = "error";
+      div.textContent = msg;
+      results.replaceChildren(div);
+    };
+
     document.querySelectorAll(".tab").forEach((tab) =>
       tab.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
@@ -363,10 +376,37 @@
           showName(fileInput.files);
         }
       });
-      form.addEventListener("submit", () => {
+      const label = submitBtn.textContent;
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        // a new analysis starts from a clean slate: drop the previous result first
+        results.innerHTML = "";
+        const file = fileInput.files[0];
+        const maxMb = Number(form.dataset.maxMb);
+        if (file && maxMb && file.size > maxMb * 1024 * 1024) {
+          showError(`File too large (${(file.size / 1048576).toFixed(0)} MB). The limit is ${maxMb} MB.`);
+          return;
+        }
         submitBtn.disabled = true;
         submitBtn.textContent = "Processing…";
         spinner.classList.add("active");
+        try {
+          const resp = await fetch(form.action, { method: "POST", body: new FormData(form) });
+          const page = new DOMParser().parseFromString(await resp.text(), "text/html");
+          const fresh = page.getElementById("results");
+          if (fresh) {
+            results.innerHTML = fresh.innerHTML;
+          } else {
+            showError(`The server returned an unexpected response (HTTP ${resp.status}). Please try again.`);
+          }
+        } catch (err) {
+          showError("Could not reach the server. Check your connection and try again.");
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = label;
+          spinner.classList.remove("active");
+        }
+        if (results.firstElementChild) results.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     });
   </script>

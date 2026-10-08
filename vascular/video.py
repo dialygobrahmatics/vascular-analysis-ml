@@ -266,13 +266,11 @@ def analyze_video(
     parts: int = 5,
     spacing_mm: float | None = None,
     vessels: str = "auto",
-    label: str | None = None,
     **params,
 ) -> dict:
     from run_analysis import analyze_array
 
     path = Path(path)
-    name = label or path.name
     sc = scan(path)
     notes: list[str] = []
 
@@ -345,7 +343,9 @@ def analyze_video(
             continue
         meta = {
             "source": str(path),
-            "label": f"{name} part {k + 1} (frame at {part['time_label']})",
+            # report text refers to "this video" rather than the uploaded file name
+            "label": f"the part {k + 1} frame of this video at {part['time_label']}",
+            "title": f"Part {k + 1} - frame at {part['time_label']}",
             "format": f"{sc.kind} frame",
         }
         try:
@@ -420,7 +420,7 @@ def analyze_video(
     fps_txt = f" at {sc.fps:.0f} fps" if sc.fps else ""
     how = "auto-detected" if pol["source"] == "auto" else "set manually"
     summary = (
-        f"{name} ({duration}{sc.n_frames} frames{fps_txt}) was split into {parts} equal part(s), and the "
+        f"This video ({duration}{sc.n_frames} frames{fps_txt}) was split into {parts} equal part(s), and the "
         f"best-quality frame of each part was analysed as {MODALITY_PHRASE[pol['polarity']]}, vessel appearance {how}."
     )
     if not with_vessels and no_signal:

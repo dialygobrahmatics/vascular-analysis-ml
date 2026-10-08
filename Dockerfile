@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 RUN useradd -m appuser \
-    && mkdir -p /app/static/uploads \
+    && mkdir -p /app/static/uploads /app/jobs \
     && chown -R appuser:appuser /app
 USER appuser
 
@@ -26,4 +26,4 @@ EXPOSE 5000
 
 # Threaded workers: a video upload + analysis can run for minutes, and gthread
 # workers keep heart-beating while a request is busy, unlike sync workers.
-CMD ["gunicorn", "-b", "0.0.0.0:5000", "-w", "2", "--worker-class", "gthread", "--threads", "2", "--timeout", "300", "app:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "-w", "2", "--worker-class", "gthread", "--threads", "2", "--timeout", "900", "app:app"]

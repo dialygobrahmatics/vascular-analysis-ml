@@ -24,18 +24,25 @@ from .preprocess import POLARITIES, polarity_from_scores, polarity_scores
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".ogv", ".m4v", ".mpg", ".mpeg", ".wmv"}
 DICOM_EXTS = {".dcm", ".dicom"}
 
-MAX_DURATION_S = 120.0
-MAX_FRAMES_NO_FPS = 3600  # frame cap when the file carries no frame rate
-MIN_PARTS, MAX_PARTS = 1, 10
+MAX_DURATION_S = 420.0  # 7 minutes
+MAX_FRAMES_NO_FPS = 12600  # frame cap when the file carries no frame rate (7 min at 30 fps)
+MIN_PARTS, MAX_PARTS = 1, 50
 ANALYSIS_SIDE = 768  # longest side of a frame sent to the full analysis
 SCORE_SIDE = 256  # longest side used to score candidate frames
 THUMB_SIDE = 96  # longest side used for per-frame brightness / motion statistics
-MAX_CANDIDATES = 150  # candidate frames held in memory (uniformly spaced over the video)
+# candidate frames held in memory (uniformly spaced over the video): at least
+# MIN_CANDIDATES, and enough that every part keeps several to choose from. The kept
+# count settles between half and all of the cap, so 10 per part leaves 5-10.
+MIN_CANDIDATES = 150
+CANDIDATES_PER_PART = 10
 
 # per-frame statistics are measured on the frame as decoded, scaled to [0, 1]
 BLANK_STD = 0.01
 DARK_MEAN, BRIGHT_MEAN = 0.03, 0.97
-FROZEN_DIFF = 0.002  # mean abs change between consecutive frames
+# a video is static when no frame differs from the first by more than this (mean abs).
+# Measured against the first frame, not the previous one: at 30 fps a slow but real
+# change (contrast filling over minutes) is tiny between consecutive frames.
+FROZEN_DRIFT = 0.004
 CUT_DIFF = 0.25
 # frame-to-frame displacement (phase correlation, as a fraction of frame width); unlike
 # the raw intensity change this is not raised by contrast flowing in or washing out
@@ -54,6 +61,11 @@ MODALITY_PHRASE = {
     "bright": "an MR/CT angiographic projection (bright vessels)",
     "dark": "an X-ray/DSA angiogram (dark vessels)",
 }
+
+
+def _no_progress(stage: str, done: int, total: int, detail: str = "") -> None:
+    """Progress callback signature: `stage` is "reading", "selecting", "checking" or "analysing";
+    `total` is 0 when unknown (e.g. a video without a frame count)."""
 
 
 class VideoError(ValueError):
@@ -75,6 +87,7 @@ class Scan:
     std: np.ndarray
     diff: np.ndarray  # mean abs change vs the previous frame (0 for the first)
     shift: np.ndarray  # displacement vs the previous frame, fraction of width (0 for the first)
+    drift: np.ndarray  # mean abs change vs the first frame
     spacing: tuple[float, float] | None
     kind: str
 
@@ -115,7 +128,7 @@ def _open_dicom(path: Path):
         fps = 1000.0 / float(ds.FrameTime)
     ps = getattr(ds, "PixelSpacing", None) or getattr(ds, "ImagerPixelSpacing", None)
     spacing = (float(ps[0]), float(ps[1])) if ps is not None and len(ps) >= 2 else None
-    return fps, spacing, "DICOM cine", iter(arr)
+    return fps, spacing, "DICOM cine", iter(arr), len(arr)
 
 
 def _open_video(path: Path):
@@ -129,6 +142,8 @@ def _open_video(path: Path):
         )
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
     fps = fps if 0.0 < fps <= 1000.0 else None
+    # container frame count: only used for progress, so an estimate is fine
+    n_est = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
 
     def frames():
         try:
@@ -140,24 +155,27 @@ def _open_video(path: Path):
         finally:
             cap.release()
 
-    return fps, None, "video", frames()
+    return fps, None, "video", frames(), n_est
 
 
-def scan(path: Path) -> Scan:
+def scan(path: Path, max_candidates: int = MIN_CANDIDATES, progress=_no_progress) -> Scan:
     """Decode once, keeping per-frame statistics for every frame and a uniformly spaced
     subset of frames (at analysis size) as best-frame candidates."""
     import cv2
 
     path = Path(path)
     opener = _open_dicom if path.suffix.lower() in DICOM_EXTS else _open_video
-    fps, spacing, kind, frames = opener(path)
+    fps, spacing, kind, frames, n_est = opener(path)
 
     candidates: list[tuple[int, np.ndarray]] = []
-    means, stds, diffs, shifts = [], [], [], []
+    means, stds, diffs, shifts, drifts = [], [], [], [], []
+    first = None
     stride, prev = 1, None
     analysis_size = thumb_size = window = None
     original_shape = (0, 0)
     for i, gray in enumerate(frames):
+        if i % 25 == 0:
+            progress("reading", i, n_est)
         if fps and i / fps > MAX_DURATION_S or (not fps and i >= MAX_FRAMES_NO_FPS):
             limit = f"{MAX_DURATION_S / 60:.0f} minutes" if fps else f"{MAX_FRAMES_NO_FPS} frames"
             raise VideoError(
@@ -173,6 +191,9 @@ def scan(path: Path) -> Scan:
         means.append(float(thumb.mean()))
         stds.append(float(thumb.std()))
         diffs.append(float(np.abs(thumb - prev).mean()) if prev is not None else 0.0)
+        if first is None:
+            first = thumb
+        drifts.append(float(np.abs(thumb - first).mean()))
         if prev is not None and min(thumb.shape) >= 8:
             # phaseCorrelate windows its inputs in place, so hand it copies
             (dx, dy), _ = cv2.phaseCorrelate(prev.copy(), thumb.copy(), window)
@@ -183,7 +204,7 @@ def scan(path: Path) -> Scan:
         if i % stride == 0:
             frame = gray if gray.shape[1::-1] == analysis_size else cv2.resize(gray, analysis_size, interpolation=cv2.INTER_AREA)
             candidates.append((i, np.ascontiguousarray(frame)))
-            if len(candidates) > MAX_CANDIDATES:
+            if len(candidates) > max_candidates:
                 # candidate indices are multiples of `stride`; dropping every other one
                 # leaves exact multiples of 2*stride, so spacing stays uniform
                 candidates = candidates[::2]
@@ -204,6 +225,7 @@ def scan(path: Path) -> Scan:
         mean=np.array(means),
         std=np.array(stds),
         diff=np.array(diffs),
+        drift=np.array(drifts),
         shift=np.array(shifts),
         spacing=spacing,
         kind=kind,
@@ -230,7 +252,7 @@ def _video_polarity(frames: list[np.ndarray], vessels: str) -> dict:
     return pol
 
 
-def _frame_scores(frames: list[np.ndarray], contrast: np.ndarray, polarity: str) -> np.ndarray:
+def _frame_scores(frames: list[np.ndarray], contrast: np.ndarray, polarity: str, progress=_no_progress) -> np.ndarray:
     """Best-frame score: mostly how much vessel-like ridge structure the frame has (this
     is what separates an opacified frame from one before contrast arrival), then
     sharpness and contrast. Each term is rank-normalised across the video so no single
@@ -239,7 +261,9 @@ def _frame_scores(frames: list[np.ndarray], contrast: np.ndarray, polarity: str)
     from skimage.filters import frangi, laplace
 
     vessel, sharp = [], []
-    for f in frames:
+    for j, f in enumerate(frames):
+        if j % 10 == 0:
+            progress("selecting", j, len(frames))
         small = _as_float(cv2.resize(f, _fit(f.shape, SCORE_SIDE), interpolation=cv2.INTER_AREA))
         vessel.append(float(frangi(small, sigmas=[1.0, 2.0], black_ridges=(polarity == "dark")).mean()))
         sharp.append(float(laplace(ndi.gaussian_filter(small, 1.0)).var()))
@@ -266,12 +290,14 @@ def analyze_video(
     parts: int = 5,
     spacing_mm: float | None = None,
     vessels: str = "auto",
+    progress=_no_progress,
     **params,
 ) -> dict:
     from run_analysis import analyze_array
 
     path = Path(path)
-    sc = scan(path)
+    parts = int(np.clip(parts, MIN_PARTS, MAX_PARTS))
+    sc = scan(path, max(MIN_CANDIDATES, CANDIDATES_PER_PART * parts), progress)
     notes: list[str] = []
 
     if sc.n_frames < 2:
@@ -290,13 +316,12 @@ def analyze_video(
             ],
         )
 
-    parts = int(np.clip(parts, MIN_PARTS, MAX_PARTS))
     if parts > sc.n_frames:
         notes.append(f"The video has only {sc.n_frames} frames, so it was split into {sc.n_frames} parts instead of {parts}.")
         parts = sc.n_frames
 
     pol = _video_polarity([f for _, f in cands], vessels)
-    scores = _frame_scores([f for _, f in cands], sc.std[[i for i, _ in cands]], pol["polarity"])
+    scores = _frame_scores([f for _, f in cands], sc.std[[i for i, _ in cands]], pol["polarity"], progress)
 
     if spacing_mm:
         spacing = (float(spacing_mm) / sc.scale,) * 2
@@ -309,6 +334,7 @@ def analyze_video(
     bounds = np.linspace(0, sc.n_frames, parts + 1)
     results, picks = [], {}
     for k in range(parts):
+        progress("checking", k, parts)
         lo, hi = int(round(bounds[k])), int(round(bounds[k + 1]))
         part = {
             "index": k + 1,
@@ -330,9 +356,12 @@ def analyze_video(
 
     # pass 2: analyse the parts that show vessels
     peak = max((p["vessel_signal"] for p in results if "vessel_signal" in p), default=0.0)
+    floor = max(VESSEL_SIGNAL_MIN, VESSEL_SIGNAL_REL * peak)
+    n_todo = sum(1 for k in picks if results[k]["vessel_signal"] >= floor)
+    n_done = 0
     for k, frame in picks.items():
         part = results[k]
-        if part["vessel_signal"] < max(VESSEL_SIGNAL_MIN, VESSEL_SIGNAL_REL * peak):
+        if part["vessel_signal"] < floor:
             # segmenting a frame without opacified vessels only traces background
             # texture, so report "no vessel data" instead of noise measurements
             part["no_signal"] = True
@@ -348,6 +377,8 @@ def analyze_video(
             "title": f"Part {k + 1} - frame at {part['time_label']}",
             "format": f"{sc.kind} frame",
         }
+        progress("analysing", n_done, n_todo, f"part {k + 1} of {parts}")
+        n_done += 1
         try:
             part["result"] = analyze_array(_as_float(frame), spacing, meta, outdir, f"{stem}_part{k + 1}", vessels=pol, **params)
         except Exception as exc:
@@ -393,7 +424,7 @@ def analyze_video(
             "and trim empty sections before uploading."
         )
     moving = sc.diff[1:]
-    if len(moving) and float(np.percentile(moving, 95)) < FROZEN_DIFF:
+    if len(moving) and float(sc.drift.max()) < FROZEN_DRIFT:
         notes.append(
             "The video is essentially static (frames barely change), so splitting adds no information; "
             "a single image upload is more appropriate."

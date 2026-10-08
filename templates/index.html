@@ -152,6 +152,11 @@
     .part h3 { font-size: 1rem; margin: 0; }
     .part .when { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
     .skipped { color: var(--muted); font-style: italic; font-size: 0.92rem; }
+    .progress-card .progress-head { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; margin-bottom: 12px; }
+    .progress-card .elapsed { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+    .progress-bar { height: 10px; background: #0e1420; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .progress-bar .fill { height: 100%; width: 0; background: var(--accent); transition: width 0.4s ease; }
+    .progress-card .step { color: var(--muted); font-size: 0.85rem; margin-top: 10px; min-height: 1.2em; font-variant-numeric: tabular-nums; }
     .overlay-img { width: 100%; border-radius: 8px; margin-top: 18px; border: 1px solid var(--border); }
     .disclaimer { color: var(--muted); font-size: 0.75rem; margin-top: 22px; line-height: 1.5; }
     .spinner {
@@ -237,7 +242,7 @@
             <input type="number" step="0.001" min="0" id="spacing-video" name="spacing_mm" placeholder="leave blank to auto-detect" />
           </div>
         </div>
-        <div class="hint">Supported: MP4, AVI, MOV, MKV, WEBM, OGV, MPG, WMV and multi-frame DICOM cine (.dcm), up to {{ max_video_mb }} MB and 2 minutes. The video is split into equal parts and the best-quality frame of each part is analysed. Pixel spacing refers to the original video pixels. More parts take longer (up to a couple of minutes).</div>
+        <div class="hint">Supported: MP4, AVI, MOV, MKV, WEBM, OGV, MPG, WMV and multi-frame DICOM cine (.dcm), up to {{ max_video_mb }} MB and {{ max_video_min }} minutes. The video is split into equal parts (up to {{ max_parts }}) and the best-quality frame of each part is analysed. Pixel spacing refers to the original video pixels. Longer videos and more parts take longer: a long video split into many parts can take several minutes.</div>
         <button type="submit">Analyse video</button>
         <div class="spinner"><div class="dot"></div> Processing video&hellip; this can take a minute or two.</div>
       </form>
@@ -336,6 +341,90 @@
       results.replaceChildren(div);
     };
 
+    // replace #results with the #results block of a page the server returned
+    const swapResults = (html, status) => {
+      const fresh = new DOMParser().parseFromString(html, "text/html").getElementById("results");
+      if (fresh) results.innerHTML = fresh.innerHTML;
+      else showError(`The server returned an unexpected response (HTTP ${status}). Please try again.`);
+    };
+
+    const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+    // progress card shown in #results while a video is uploaded and analysed
+    const showProgress = () => {
+      results.innerHTML = `
+        <div class="card progress-card">
+          <div class="progress-head"><span class="msg">Uploading video</span><span class="elapsed">0:00</span></div>
+          <div class="progress-bar"><div class="fill"></div></div>
+          <div class="step"></div>
+        </div>`;
+      const card = results.querySelector(".progress-card");
+      const started = Date.now();
+      const timer = setInterval(() => {
+        card.querySelector(".elapsed").textContent = `elapsed ${fmtTime((Date.now() - started) / 1000)}`;
+      }, 1000);
+      return {
+        update(msg, percent, step) {
+          card.querySelector(".msg").textContent = msg;
+          card.querySelector(".fill").style.width = `${Math.max(0, Math.min(100, percent))}%`;
+          card.querySelector(".step").textContent = step || "";
+        },
+        stop() { clearInterval(timer); },
+      };
+    };
+
+    // upload with XMLHttpRequest (fetch cannot report upload progress), then poll the job
+    const uploadVideo = (form, prog) => new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", form.action);
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const mb = (n) => (n / 1048576).toFixed(1);
+        prog.update("Uploading video", 0, `${Math.round((e.loaded / e.total) * 100)}% (${mb(e.loaded)} of ${mb(e.total)} MB)`);
+      };
+      xhr.upload.onload = () => prog.update("Upload complete, starting analysis", 0, "");
+      xhr.onload = () => resolve(xhr);
+      xhr.onerror = () => reject(new Error("The upload failed. Check your connection and try again."));
+      xhr.send(new FormData(form));
+    });
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    const runVideo = async (form) => {
+      const prog = showProgress();
+      try {
+        const xhr = await uploadVideo(form, prog);
+        if (xhr.status !== 202) {
+          swapResults(xhr.responseText, xhr.status);  // validation error page
+          return;
+        }
+        const job = JSON.parse(xhr.responseText).job;
+        let misses = 0;
+        while (true) {
+          await sleep(1000);
+          let st;
+          try {
+            const r = await fetch(`/video-jobs/${job}`, { cache: "no-store" });
+            if (!r.ok) throw new Error(String(r.status));
+            st = await r.json();
+            misses = 0;
+          } catch (err) {
+            if (++misses >= 10) throw new Error("Lost contact with the server while the video was being analysed. Please try again.");
+            continue;
+          }
+          if (st.state === "done") break;
+          // the job file is refreshed at least every few seconds while work is happening
+          if (st.state === "running" && st.age > 180) throw new Error("The analysis stopped responding on the server. Please try again.");
+          prog.update(st.message, st.percent, st.step);
+        }
+        prog.update("Done, loading results", 100, "");
+        const r = await fetch(`/video-jobs/${job}/result`, { cache: "no-store" });
+        swapResults(await r.text(), r.status);
+      } finally {
+        prog.stop();
+      }
+    };
+
     document.querySelectorAll(".tab").forEach((tab) =>
       tab.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
@@ -389,18 +478,16 @@
         }
         submitBtn.disabled = true;
         submitBtn.textContent = "Processing…";
-        spinner.classList.add("active");
         try {
-          const resp = await fetch(form.action, { method: "POST", body: new FormData(form) });
-          const page = new DOMParser().parseFromString(await resp.text(), "text/html");
-          const fresh = page.getElementById("results");
-          if (fresh) {
-            results.innerHTML = fresh.innerHTML;
+          if (form.id === "pane-video") {
+            await runVideo(form);
           } else {
-            showError(`The server returned an unexpected response (HTTP ${resp.status}). Please try again.`);
+            spinner.classList.add("active");
+            const resp = await fetch(form.action, { method: "POST", body: new FormData(form) });
+            swapResults(await resp.text(), resp.status);
           }
         } catch (err) {
-          showError("Could not reach the server. Check your connection and try again.");
+          showError(err.message || "Could not reach the server. Check your connection and try again.");
         } finally {
           submitBtn.disabled = false;
           submitBtn.textContent = label;

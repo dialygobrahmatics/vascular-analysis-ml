@@ -180,7 +180,7 @@ def main(argv=None) -> int:
     ap.add_argument("--outdir", default="outputs", help="output folder (default: ./outputs)")
     ap.add_argument("--spacing-mm", type=float, default=None, help="override pixel spacing (mm/px)")
     ap.add_argument("--vessels", choices=VESSEL_CHOICES, default="auto", help="vessel appearance: bright (MR/CT), dark (X-ray/DSA) or auto")
-    ap.add_argument("--parts", type=int, default=5, help="videos: number of equal parts to split into (1-10, default 5)")
+    ap.add_argument("--parts", type=int, default=5, help="videos: number of equal parts to split into (1-50, default 5)")
     ap.add_argument("--min-branch-px", type=int, default=12, help="ignore centerline branches shorter than this")
     ap.add_argument("--stenosis-ratio", type=float, default=0.7, help="candidate narrowing threshold (default 0.7)")
     ap.add_argument("--min-lesion-px", type=int, default=6, help="minimum run of narrowed calibre (px) for a candidate (default 6)")

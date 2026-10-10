@@ -1,7 +1,0 @@
-# Dialygo-Access (local review app) - on top of requirements.txt
--r requirements.txt
-waitress>=3.0             # production web server for the local app
-pylibjpeg>=2.0            # decoders for compressed DICOM (JPEG, JPEG-LS, JPEG 2000), common in X-ray angiography
-pylibjpeg-libjpeg>=2.1
-pylibjpeg-openjpeg>=2.3
-pytest>=8.0               # tests

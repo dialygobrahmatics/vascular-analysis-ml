@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Review {{ study.pseudonym or study.id }} &middot; Dialygo-Access{% endblock %}
+{% block body %}
+<div id="app" data-study="{{ study.id }}">
+  <div class="card">
+    <div class="toolbar" style="justify-content:space-between">
+      <h1 id="title">Study</h1>
+      <span><a href="{{ url_for('audit_page', sid=study.id) }}">Change log</a></span>
+    </div>
+    <div id="side"></div>
+    <div id="error"></div>
+  </div>
+  <div id="warnings"></div>
+  <div class="layout">
+    <div>
+      <div class="card">
+        <h3>Runs (in time order)</h3>
+        <div class="runs" id="runs"></div>
+        <div id="run-info" class="muted small"></div>
+        <div class="viewer">
+          <div>
+            <h3>Run video</h3>
+            <div class="stage"><img id="player" alt="run frame"></div>
+            <div class="toolbar">
+              <button class="secondary" id="play">Play</button>
+              <input type="range" id="scrub" min="0" value="0" style="flex:1">
+              <span id="frame-no" class="small muted"></span>
+              <button class="secondary" id="set-best">Use this frame</button>
+            </div>
+            <svg class="curve" id="curve" viewBox="0 0 400 90" preserveAspectRatio="none"></svg>
+            <div class="small muted">Dye in the vessel over time. Blue line: best frame. Red: frames where the patient moved.</div>
+          </div>
+          <div>
+            <h3>Best frame &middot; outline and measurements</h3>
+            <div class="stage" id="stage">
+              <canvas id="base"></canvas>
+              <canvas id="over" class="over"></canvas>
+            </div>
+            <div class="toolbar" id="tools">
+              <button class="tool secondary" data-tool="view">Look</button>
+              <button class="tool secondary" data-tool="measure">Measure: click start, then end</button>
+              <button class="tool secondary" data-tool="add">Brush + vessel</button>
+              <button class="tool secondary" data-tool="erase">Brush − vessel</button>
+              <button class="tool secondary" data-tool="device">Brush device</button>
+              <button class="tool secondary" data-tool="undevice">Erase device</button>
+              <input type="range" id="brush" min="1" max="20" value="4" title="brush size">
+              <button class="secondary" id="save-outline">Save outline</button>
+            </div>
+            <div class="toolbar small">
+              <label><input type="checkbox" id="show-vessel" checked> vessel (orange)</label>
+              <label><input type="checkbox" id="show-device" checked> devices (magenta)</label>
+              <span class="spacer"></span>
+              <button class="tool secondary" data-tool="marker">Calibrate: ruler / marker</button>
+              <button class="tool secondary" data-tool="devcal">Calibrate: measured device</button>
+            </div>
+            <div id="calib" class="small"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Measurements on this run</h3>
+        <div class="small muted">Click on the width profile to move the narrowest point. Hold Shift and click twice to choose the normal (reference) part.</div>
+        <div id="findings"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" id="sign-card"></div>
+      <div class="card">
+        <h3>Segments: answer every one</h3>
+        <table id="segments"></table>
+      </div>
+      <div class="card">
+        <h3>Danger signs: answer each one</h3>
+        <div id="danger"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='review.js') }}"></script>{% endblock %}

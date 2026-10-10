@@ -1,0 +1,4 @@
+{
+  "_comment": "Devices measured by OUR team with a micrometer (PRD section 6, calibration method 3). Never enter a size from a label or catalogue (e.g. '7 French'): that is the inside diameter and brands differ. An entry without measured_outer_mm and measured_by is ignored. Example entry: {\"id\": \"sheath-brandX-7F\", \"name\": \"Brand X 7F sheath\", \"measured_outer_mm\": 2.84, \"measured_tolerance_mm\": 0.02, \"measured_by\": \"initials\", \"measured_on\": \"2026-10-20\"}",
+  "devices": []
+}

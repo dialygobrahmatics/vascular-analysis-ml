@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card" style="max-width:520px;margin:40px auto">
+  <h1>Page not found</h1>
+  <p class="muted">This study or page does not exist (it may have been removed when the app's data was reset).</p>
+  <p><a class="btn" href="{{ url_for('studies') }}">Go to the studies list</a></p>
+</div>
+{% endblock %}
